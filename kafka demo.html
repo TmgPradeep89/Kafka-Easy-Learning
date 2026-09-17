@@ -1,0 +1,1678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Apache Kafka Works — One Payment Journey</title>
+<style>
+:root{
+  --bg:#f6f4ef; --ink:#2a2d3a; --muted:#7a7f8c; --line:#e6e1d6;
+  --card:#ffffff;
+  --shadow:0 2px 10px rgba(60,55,40,.08), 0 10px 30px rgba(60,55,40,.06);
+  --kafka:#e8833c; --kafka-soft:#fdf1e4; --kafka-ink:#b35a1d;
+  --indigo:#5b6bd6; --indigo-soft:#eef0fc; --indigo-ink:#4250c0;
+  --green:#2f9e6e; --green-soft:#e7f6ef; --green-ink:#1e7a51;
+  --orange-soft:#fbf0e2; --orange-ink:#a05f14;
+  --red-soft:#fdeceb; --red-ink:#b03a37;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  background:var(--bg); color:var(--ink); overflow:hidden;
+  display:flex; flex-direction:column; user-select:none;
+}
+button{font:inherit;cursor:pointer;border:none;background:none;color:inherit}
+button:focus-visible{outline:2px solid var(--indigo);outline-offset:2px}
+
+/* ---------- top bar ---------- */
+header{
+  height:54px;flex:none;display:flex;align-items:center;gap:18px;padding:0 20px;
+  background:#fff;border-bottom:1px solid var(--line);z-index:50;
+}
+.brand{display:flex;align-items:center;gap:9px;font-size:14px;white-space:nowrap}
+.brand b{font-weight:800}
+.brand span{color:var(--muted);font-size:12px}
+#stageBar{display:flex;gap:4px;margin:0 auto}
+.pill{
+  font-size:10.5px;letter-spacing:.08em;color:var(--muted);padding:6px 11px;border-radius:999px;
+  display:flex;align-items:center;gap:7px;font-weight:700;transition:all .35s ease;
+}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:#d8d2c6;transition:background .35s}
+.pill.on{color:#fff;background:var(--ink)}
+.pill.on .dot{background:var(--kafka)}
+#stepCount{font-size:12px;color:var(--muted);min-width:76px;text-align:right;font-weight:600}
+
+/* ---------- stage / world ---------- */
+#stage{
+  flex:1;position:relative;overflow:hidden;
+  background:
+    radial-gradient(rgba(90,80,60,.05) 1px, transparent 1.4px) 0 0/26px 26px,
+    var(--bg);
+}
+#world{position:absolute;left:0;top:0;width:1600px;height:900px;transform-origin:0 0;will-change:transform}
+.node{
+  position:absolute;background:var(--card);border:1.5px solid var(--line);border-radius:16px;
+  box-shadow:var(--shadow);z-index:2;transition:opacity .6s ease,filter .6s ease;
+}
+.node.is-dim{opacity:.16;filter:grayscale(.55)}
+.node.offline{filter:grayscale(1);opacity:.55}
+.node.flash{filter:brightness(.7) saturate(.4)}
+.node.in{animation:nodeIn .5s ease}
+@keyframes nodeIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
+.node .hd{display:flex;align-items:center;gap:8px;padding:12px 14px 0;font-size:12px;font-weight:800;letter-spacing:.05em;color:#3c4150}
+.node .hd .ic{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:none}
+.cons .chip{position:absolute;left:14px;top:52px}
+#fraud .chip,#analytics .chip{top:46px}
+
+/* kafka node */
+#kafka{background:#fff6ee;border:2px solid var(--kafka)}
+#kafka .hd{color:var(--kafka-ink)}
+#kafka .ksub{font-size:10px;font-weight:600;color:#d9a06b;letter-spacing:.03em;margin-left:2px}
+#kafka{transform-origin:center}
+#kafka.ping{animation:kping .7s ease}
+@keyframes kping{0%{transform:scale(1)}35%{transform:scale(1.028)}100%{transform:scale(1)}}
+
+/* person node */
+#person{background:none;border:none;box-shadow:none}
+#person g.phshow{display:none}
+#person.ph-wallet #phWallet{display:block}
+#person.ph-proc #phProc{display:block}
+#person.ph-txn #phTxn{display:block}
+#person.ph-ok #phOk{display:block}
+#spinner{transform-box:fill-box;transform-origin:center;animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#payBtnG{transform-box:fill-box;transform-origin:center;transition:transform .12s ease}
+#payBtnG.pressed{transform:scale(.88)}
+#payRipG{transform-box:fill-box;transform-origin:center;opacity:0}
+#payRipG.go{animation:rip .5s ease-out}
+@keyframes rip{0%{opacity:.55;transform:scale(.4)}100%{opacity:0;transform:scale(1.5)}}
+#fingerG{opacity:0;transition:opacity .35s ease}
+#fingerG.show{opacity:1}
+
+/* chips */
+.chip{
+  display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:5px 10px;border-radius:999px;
+  background:#f2f0ea;color:#5c606b;font-weight:700;transition:background .3s,color .3s;
+}
+.chip.ok{background:var(--green-soft);color:var(--green-ink)}
+.chip.warn{background:var(--orange-soft);color:var(--orange-ink)}
+.chip.bad{background:var(--red-soft);color:var(--red-ink)}
+.chip.info{background:var(--indigo-soft);color:var(--indigo-ink)}
+#svcStatus{position:absolute;left:14px;top:50px}
+#svcChip{
+  position:absolute;left:14px;top:86px;width:200px;height:27px;border-radius:9px;background:#fff;
+  border:1.5px solid #ddd6c9;display:flex;align-items:center;justify-content:center;
+  font-size:10.5px;font-weight:700;color:#5c606b;gap:6px;
+}
+#svcChip.ev{border-color:#c9cfff;background:var(--indigo-soft);color:var(--indigo-ink)}
+#svcProdTag{position:absolute;top:-13px;right:14px;background:var(--indigo);color:#fff;border:none}
+
+/* json card */
+.json-card{left:678px;top:336px;width:236px;height:182px;background:#fffdf9}
+.json-card .jc-hd{font-size:10px;font-weight:800;letter-spacing:.14em;color:var(--muted);padding:12px 14px 6px}
+.json-card pre{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10.5px;line-height:1.55;
+  padding:0 14px 12px;color:#3c4150;white-space:pre;
+}
+.json-card .k{color:var(--indigo-ink)} .json-card .s{color:var(--green-ink)} .json-card .n{color:var(--orange-ink)}
+.json-card.pop{animation:popIn .45s ease}
+@keyframes popIn{from{opacity:0;transform:scale(.86) translateY(8px)}to{opacity:1;transform:none}}
+
+/* callout */
+.callout{position:absolute;z-index:4;text-align:center}
+.co-label{display:inline-block;background:var(--ink);color:#fff;font-weight:800;font-size:12px;letter-spacing:.1em;padding:8px 16px;border-radius:11px}
+.co-line{width:3px;height:100px;background:var(--ink);margin:0 auto;position:relative;transform-origin:top;transform:scaleY(0)}
+.callout.in .co-line{animation:grow .5s .15s ease forwards}
+.callout.in .co-label{animation:nodeIn .4s ease}
+.co-line::after{
+  content:'';position:absolute;bottom:-9px;left:50%;transform:translateX(-50%);
+  border:8px solid transparent;border-top:10px solid var(--ink);
+}
+@keyframes grow{to{transform:scaleY(1)}}
+
+/* dup note */
+#dupNote{left:1290px;top:92px;width:300px;background:#fffaf2;border:1.5px solid #f0c48a}
+#dupNote b{display:block;font-size:12px;color:var(--orange-ink);padding:12px 14px 4px}
+#dupNote span{display:block;font-size:11px;color:#8a6a3f;padding:0 14px 12px;font-weight:600}
+
+/* ---------- kafka interior layers ---------- */
+.kv{position:absolute;inset:0;z-index:3;pointer-events:none;opacity:0;transition:opacity .5s ease}
+.kv.on{opacity:1}
+.kv-title{position:absolute;left:878px;top:298px;font-size:11px;font-weight:800;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}
+.topic-label{position:absolute;left:880px;top:320px;font-size:13px;font-weight:800;letter-spacing:.14em;color:var(--kafka-ink)}
+.topic-label.pulse{animation:topicPulse 1s ease}
+@keyframes topicPulse{0%{transform:scale(1)}40%{transform:scale(1.12)}100%{transform:scale(1)}}
+.shelf{position:absolute;left:878px;top:350px;width:304px;height:130px;border:2px dashed #eab686;border-radius:14px;background:#fffdf9}
+.lane{
+  position:absolute;left:878px;width:304px;height:56px;border:1.5px solid #e9e0d2;border-radius:12px;
+  background:#fffdf9;display:flex;align-items:center;padding:0 14px;font-size:12px;font-weight:800;color:#a99f90;
+  transition:all .4s ease;
+}
+.lane.hl{border-color:var(--kafka);background:var(--kafka-soft);color:var(--kafka-ink)}
+.orow{position:absolute;left:878px;width:304px;height:50px;display:flex;align-items:center;gap:10px}
+.ochip{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;font-weight:800;color:#5c606b;
+  background:#f2f0ea;padding:6px 0;border-radius:8px;width:74px;text-align:center;flex:none;transition:all .4s;
+}
+.orow.hl .ochip{background:var(--kafka);color:#fff}
+.mini-wide{
+  width:196px;height:27px;border-radius:9px;background:#fff;border:1.5px solid #ddd6c9;display:flex;align-items:center;
+  justify-content:center;font-size:10.5px;font-weight:700;color:#6b7280;flex:none;
+}
+.mini-wide.dashed{border-style:dashed;opacity:.5}
+.slot-wide{width:196px;height:46px;border:1.5px dashed #d8d0c2;border-radius:10px;flex:none;transition:all .4s}
+.orow.hl .slot-wide{border-color:var(--kafka);box-shadow:0 0 0 5px var(--kafka-soft)}
+.orow .check{margin-left:auto;font-size:10px;font-weight:800;color:var(--green-ink);opacity:0;transform:translateX(8px);transition:all .35s ease}
+.orow .check.show{opacity:1;transform:none}
+.bbox{
+  position:absolute;left:878px;width:304px;height:56px;border:1.5px solid #e9e0d2;border-radius:12px;
+  background:#fffdf9;display:flex;align-items:center;padding:0 16px;font-weight:800;font-size:12.5px;color:#8a8f9c;
+}
+.mini-xw{
+  position:absolute;width:84px;height:24px;border-radius:8px;background:#fff;border:1.5px solid #ddd6c9;
+  display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:800;color:#5c606b;
+  box-shadow:0 1px 4px rgba(0,0,0,.07);
+}
+/* lag view */
+.slot{position:absolute;width:28px;height:44px;border:1.5px dashed #ddd5c8;border-radius:8px}
+.lagmini{
+  position:absolute;width:28px;height:44px;border-radius:8px;background:#fff;border:1.5px solid #d8d0c2;
+  box-shadow:0 1px 3px rgba(0,0,0,.08);display:flex;align-items:center;justify-content:center;font-size:13px;
+}
+.lagc{
+  position:absolute;left:960px;top:452px;width:140px;height:54px;background:#fff;border:1.5px solid #c9cfff;border-radius:12px;
+  box-shadow:var(--shadow);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  font-size:12px;font-weight:800;color:var(--indigo-ink);
+}
+.lagc span{font-size:10px;font-weight:600;color:var(--muted)}
+.lagnum{
+  position:absolute;left:1030px;top:536px;transform:translateX(-50%);font-size:14px;font-weight:800;color:#5c606b;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;transition:color .3s;
+}
+.lagnum.hot{color:var(--red-ink)}
+
+/* ---------- envelopes (dynamic) ---------- */
+.env{
+  position:absolute;left:0;top:0;width:136px;height:56px;background:#fff;border:2px solid #d9d3c7;border-radius:12px;
+  box-shadow:var(--shadow);z-index:6;display:flex;flex-direction:column;justify-content:center;padding:0 10px 0 8px;gap:1px;
+}
+.env .e-ic{position:absolute;left:7px;top:50%;transform:translateY(-50%);width:21px;height:21px;color:#8a8f9c}
+.env .e-t1{font-size:10px;font-weight:800;margin-left:26px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#3c4150}
+.env .e-t2{font-size:10px;color:var(--muted);margin-left:26px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.env-event{border-color:#c9cfff;background:#f4f6ff}
+.env-event .e-ic{color:var(--indigo-ink)}
+.env-event .e-t1{color:var(--indigo-ink)}
+.env-dup{border-color:#f0c48a;background:#fff8ef}
+.env-dup .e-ic{color:var(--orange-ink)}
+.env-dup .e-t1{color:var(--orange-ink)}
+.env-small{width:110px;height:46px}
+.env-small .e-ic{width:18px;height:18px}
+.env-small .e-t1{font-size:9.5px}
+.env-small .e-t2{font-size:9.5px}
+.ptr{
+  position:absolute;z-index:7;background:var(--ink);color:#fff;font-size:10px;font-weight:800;padding:7px 11px;
+  border-radius:9px;display:flex;gap:6px;align-items:center;letter-spacing:.04em;box-shadow:var(--shadow);
+}
+.tag{position:absolute;z-index:7;font-size:10px;font-weight:800;padding:6px 10px;border-radius:999px;background:var(--green-soft);color:var(--green-ink);box-shadow:var(--shadow)}
+.tag.warn{background:var(--orange-soft);color:var(--orange-ink)}
+.copylab{position:absolute;z-index:7;font-size:10px;font-weight:800;color:var(--kafka-ink);background:var(--kafka-soft);padding:4px 9px;border-radius:8px}
+
+/* ---------- group box ---------- */
+#groupBox .grp-chips{display:flex;gap:12px;padding:14px}
+.gchip{
+  flex:1;height:50px;border:1.5px solid #dfe3f5;background:#f7f8fe;border-radius:12px;display:flex;align-items:center;
+  justify-content:center;gap:6px;font-size:11px;font-weight:800;color:var(--indigo-ink);
+}
+#grpAssign{
+  position:absolute;left:0;right:0;bottom:12px;text-align:center;font-size:10px;color:var(--muted);font-weight:700;
+  opacity:0;transition:opacity .5s ease;
+}
+#grpAssign.show{opacity:1}
+#grpSecond{border-style:dashed;box-shadow:none;background:#fbfaf7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+#grpSecond b{font-size:11.5px}
+#grpSecond span{font-size:9.5px;color:var(--muted);font-weight:600}
+
+/* ---------- screen-fixed overlays ---------- */
+.screen-card{
+  position:absolute;background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:0 12px 44px rgba(60,55,40,.16);
+  z-index:30;
+}
+#card{left:50%;top:50%;transform:translate(-50%,-50%);width:min(92%,580px);max-height:86%;overflow:auto;padding:26px 30px}
+#qaPanel{right:16px;top:14px;width:238px;padding:14px 16px;z-index:25}
+#testCard{left:50%;top:14px;transform:translateX(-50%);z-index:25;padding:12px 24px;display:flex;flex-direction:column;align-items:center;gap:2px}
+#testCard.passed{background:var(--green-soft);border-color:#9fd4b8}
+#testCard.passed .tc-id{color:var(--green-ink)}
+#statusList{right:16px;top:14px;width:220px;padding:14px 16px;z-index:25}
+.qa-title,.sl-title{font-size:10.5px;font-weight:800;letter-spacing:.16em;color:var(--muted);margin-bottom:8px}
+.qa-item{display:flex;gap:9px;align-items:center;font-size:12.5px;font-weight:600;color:#a29c90;padding:5px 0;transition:color .3s}
+.qa-ic{
+  width:18px;height:18px;border-radius:50%;border:1.5px solid #d5cfc3;display:flex;align-items:center;justify-content:center;
+  font-size:10px;flex:none;transition:all .3s;
+}
+.qa-item.done{color:var(--green-ink)}
+.qa-item.done .qa-ic{background:var(--green);border-color:var(--green);color:#fff}
+.sl-row{display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;color:#4a4e59;padding:4px 0}
+.sl-row .okc{color:var(--green);font-weight:800}
+.sl-note{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);font-size:11.5px;color:var(--kafka-ink);font-weight:800}
+.tc-id{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;font-weight:800;letter-spacing:.1em;color:var(--indigo-ink)}
+.tc-name{font-size:14px;font-weight:800}
+.tc-sub{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--muted)}
+#statement{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:40;pointer-events:none;
+  background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:18px;padding:22px 34px;box-shadow:var(--shadow);
+  text-align:center;max-width:80%;
+}
+#statement.st-in{animation:stIn .5s ease}
+@keyframes stIn{from{opacity:0;transform:translate(-50%,-46%) scale(.92)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+.st-main{font-size:clamp(24px,4vw,42px);font-weight:800;letter-spacing:.01em}
+.st-sub{margin-top:8px;font-size:14px;color:var(--muted);font-weight:600}
+.hidden{display:none !important}
+
+/* summary card */
+.sum-hd{font-size:12px;font-weight:800;letter-spacing:.16em;color:var(--muted);margin-bottom:12px}
+.s-item{display:flex;gap:14px;align-items:baseline;padding:6.5px 0;opacity:0;transform:translateY(7px);transition:all .45s ease}
+.s-item.show{opacity:1;transform:none}
+.s-item b{width:158px;flex:none;font-size:11.5px;letter-spacing:.07em;color:var(--kafka-ink)}
+.s-item span{font-size:13.5px;color:#4a4e59;font-weight:500}
+.sum-final{margin-top:16px;padding-top:16px;border-top:1px dashed var(--line);text-align:center}
+.sum-final.in{animation:nodeIn .6s ease}
+.sf1{font-size:18px;font-weight:800}
+.sf2{font-size:13.5px;color:var(--muted);margin-top:5px;font-weight:600}
+
+/* quiz */
+.qz-top{font-size:10.5px;font-weight:800;letter-spacing:.14em;color:var(--muted)}
+.qz-q{font-size:16.5px;font-weight:800;margin:10px 0 16px;line-height:1.4}
+.qz-opt{
+  display:block;width:100%;text-align:left;border:1.5px solid #e2ddd2;border-radius:12px;padding:11px 14px;font-size:13.5px;
+  font-weight:600;color:#3c4150;background:#fbfaf7;margin-bottom:8px;transition:all .2s ease;
+}
+.qz-opt:hover:not(:disabled){border-color:var(--ink);transform:translateX(2px)}
+.qz-opt.good{background:var(--green-soft);border-color:#9fd4b8;color:var(--green-ink)}
+.qz-opt.bad{background:var(--red-soft);border-color:#ebaaa7;color:var(--red-ink)}
+.qz-note{margin-top:10px;font-size:12.5px;color:#5c606b;background:#f4f2ec;padding:11px 13px;border-radius:10px;line-height:1.5}
+
+/* done card */
+.done-hd{font-size:27px;font-weight:800;line-height:1.4;text-align:center;letter-spacing:.01em}
+.done-sub{margin-top:16px;font-size:14px;color:var(--muted);text-align:center;line-height:1.65;font-weight:600}
+.done-mini{
+  margin:18px auto 0;width:fit-content;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+  background:var(--green-soft);color:var(--green-ink);padding:8px 16px;border-radius:999px;font-weight:800;
+}
+
+/* explore */
+.ex-hd{font-size:11px;font-weight:800;letter-spacing:.16em;color:var(--muted)}
+.ex-path{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin:14px 0;font-size:11px;font-weight:800}
+.ex-path span{background:#f2f0ea;color:#8a8f90;padding:5px 10px;border-radius:8px;letter-spacing:.05em}
+.ex-path span.cur{background:var(--kafka);color:#fff}
+.ex-path i{color:#c9c2b4;font-style:normal}
+.ex-notes{margin:4px 0 12px;padding-left:18px}
+.ex-notes li{font-size:13.5px;color:#4a4e59;line-height:1.6;margin-bottom:5px}
+.ex-extra{font-size:11.5px;color:var(--muted);font-weight:600;margin-bottom:14px}
+
+/* ---------- footer ---------- */
+footer{
+  flex:none;display:flex;justify-content:space-between;gap:24px;padding:12px 22px 14px;background:#fff;border-top:1px solid var(--line);z-index:50;
+}
+.info{flex:1;max-width:660px;min-width:0}
+.info-label{font-size:10px;letter-spacing:.16em;color:#b0aa9d;font-weight:800;margin-bottom:4px}
+#infoText{font-size:14.5px;line-height:1.45;color:#3c4150;font-weight:500}
+#infoText.fade{animation:infoIn .45s ease}
+@keyframes infoIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+#concept{margin-top:9px;display:flex;gap:9px;align-items:center}
+.c-name{background:var(--ink);color:#fff;font-weight:800;font-size:10px;letter-spacing:.1em;padding:5px 9px;border-radius:7px;flex:none}
+.c-line{font-size:12.5px;color:#5c606b;font-weight:600}
+.controls{display:flex;flex-direction:column;align-items:flex-end;gap:8px;min-width:270px}
+#secondaries{display:flex;gap:8px;min-height:30px;flex-wrap:wrap;justify-content:flex-end}
+.ghost{
+  font-size:10.5px;font-weight:800;letter-spacing:.06em;border:1.5px solid #d8d2c6;border-radius:999px;padding:7px 14px;
+  color:#5c606b;background:#fff;transition:all .2s ease;
+}
+.ghost:hover{border-color:var(--ink);color:var(--ink)}
+#primaryBtn{
+  font-size:15px;font-weight:800;letter-spacing:.03em;padding:13px 28px;border-radius:12px;background:var(--ink);color:#fff;
+  box-shadow:0 4px 14px rgba(42,45,58,.22);transition:all .2s ease;min-width:210px;
+}
+#primaryBtn:hover:not(:disabled){background:#3a3e52;transform:translateY(-1px)}
+#primaryBtn:disabled{opacity:.4;cursor:default;box-shadow:none}
+.mini-nav{display:flex;gap:16px}
+.mini-nav button{font-size:10.5px;letter-spacing:.12em;color:#a29c90;font-weight:800;padding:4px 1px;text-transform:uppercase;transition:color .2s}
+.mini-nav button:hover{color:var(--ink)}
+#footNote{position:absolute;left:16px;bottom:9px;font-size:10.5px;color:#b8b2a5;z-index:10;font-weight:600}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#e8833c" stroke-width="2.2"><rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M3.5 6.5l8.5 6 8.5-6"/></svg>
+    <b>How Kafka Works</b><span>· one payment journey</span>
+  </div>
+  <div id="stageBar">
+    <span class="pill"><span class="dot"></span>PAYMENT</span>
+    <span class="pill"><span class="dot"></span>EVENT</span>
+    <span class="pill"><span class="dot"></span>KAFKA</span>
+    <span class="pill"><span class="dot"></span>CONSUMERS</span>
+    <span class="pill"><span class="dot"></span>FAILURE</span>
+    <span class="pill"><span class="dot"></span>QA</span>
+  </div>
+  <div id="stepCount">Step 1 / 30</div>
+</header>
+
+<div id="stage">
+  <div id="world">
+
+    <!-- connection lines (under everything) -->
+    <svg id="linesSVG" viewBox="0 0 1600 900" width="1600" height="900" style="position:absolute;left:0;top:0;z-index:1;pointer-events:none">
+      <g id="gLines" fill="none" stroke-linecap="round"></g>
+    </svg>
+
+    <!-- ============ USER / PERSON ============ -->
+    <div class="node ph-wallet" id="person" style="left:40px;top:170px;width:300px;height:560px">
+      <svg viewBox="0 0 300 560" width="300" height="560">
+        <ellipse cx="150" cy="524" rx="112" ry="13" fill="#ece5d8"/>
+        <rect x="116" y="386" width="30" height="128" rx="14" fill="#414a63"/>
+        <rect x="154" y="386" width="30" height="128" rx="14" fill="#414a63"/>
+        <rect x="100" y="212" width="100" height="182" rx="32" fill="#5b8def"/>
+        <path d="M108 244 C 94 292, 102 330, 128 352" stroke="#5b8def" stroke-width="24" stroke-linecap="round" fill="none"/>
+        <path d="M192 244 C 206 292, 198 330, 172 352" stroke="#5b8def" stroke-width="24" stroke-linecap="round" fill="none"/>
+        <circle cx="150" cy="150" r="40" fill="#f2c9a0"/>
+        <path d="M110 150 a40 40 0 0 1 80 0 z" fill="#4a3a30"/>
+        <circle cx="137" cy="155" r="2.6" fill="#2a2d3a"/>
+        <circle cx="163" cy="155" r="2.6" fill="#2a2d3a"/>
+        <path d="M141 170 q9 7 18 0" stroke="#c98a5e" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        <circle cx="130" cy="352" r="11" fill="#f2c9a0"/>
+        <circle cx="170" cy="352" r="11" fill="#f2c9a0"/>
+        <rect x="106" y="248" width="88" height="154" rx="16" fill="#2a2d3a"/>
+        <rect x="113" y="256" width="74" height="130" rx="9" fill="#fbfcff"/>
+        <rect x="138" y="251.5" width="24" height="3" rx="1.5" fill="#4c5268"/>
+        <g id="phWallet" class="phshow">
+          <text x="150" y="273" text-anchor="middle" font-size="7" letter-spacing="1" fill="#9aa0ad" font-weight="700">DIGITAL WALLET</text>
+          <text x="150" y="290" text-anchor="middle" font-size="10.5" font-weight="800" fill="#2a2d3a">Send Money</text>
+          <text x="150" y="313" text-anchor="middle" font-size="15" font-weight="800" fill="#2f9e6e">Rs. 500</text>
+          <g id="payBtnG"><rect x="123" y="326" width="54" height="22" rx="11" fill="#2f9e6e"/><text x="150" y="341" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">PAY</text></g>
+          <g id="payRipG"><circle cx="150" cy="337" r="16" fill="none" stroke="#2f9e6e" stroke-width="2.5"/></g>
+          <rect x="134" y="358" width="32" height="13" rx="4" fill="#e7ebf5"/>
+          <circle cx="158" cy="364.5" r="2.4" fill="#b9c2d8"/>
+        </g>
+        <g id="phProc" class="phshow">
+          <circle id="spinner" cx="150" cy="300" r="11" fill="none" stroke="#5b8def" stroke-width="3" stroke-linecap="round" stroke-dasharray="42 30"/>
+          <text x="150" y="333" text-anchor="middle" font-size="8.5" fill="#5b6bd6" font-weight="700">Processing…</text>
+        </g>
+        <g id="phTxn" class="phshow">
+          <text x="150" y="293" text-anchor="middle" font-size="10.5" font-weight="800" fill="#2a2d3a">TXN1001</text>
+          <text x="150" y="309" text-anchor="middle" font-size="9" fill="#6b7280" font-weight="600">Rs. 500</text>
+          <text x="150" y="332" text-anchor="middle" font-size="7" font-weight="800" fill="#4250c0">PaymentCompleted</text>
+        </g>
+        <g id="phOk" class="phshow">
+          <circle cx="150" cy="296" r="14" fill="#2f9e6e"/>
+          <path d="M143.5 296 l4.5 4.5 l8.5 -9" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <text x="150" y="329" text-anchor="middle" font-size="8.5" font-weight="800" fill="#2a2d3a">Payment</text>
+          <text x="150" y="341" text-anchor="middle" font-size="8.5" font-weight="800" fill="#2a2d3a">Completed</text>
+        </g>
+        <g id="fingerG" transform="translate(285,440)">
+          <rect x="4" y="-5" width="30" height="10" rx="5" fill="#f2c9a0"/>
+          <circle r="8" fill="#f2c9a0"/>
+        </g>
+      </svg>
+    </div>
+
+    <!-- ============ PAYMENT SERVICE ============ -->
+    <div class="node" id="svc" style="left:430px;top:380px;width:230px;height:170px">
+      <div class="hd">
+        <span class="ic" style="background:var(--indigo-soft);color:var(--indigo-ink)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="3.4"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"/></svg>
+        </span>
+        PAYMENT SERVICE
+      </div>
+      <span class="chip" id="svcStatus">—</span>
+      <span id="svcChip" class="hidden">✉&nbsp; TXN1001</span>
+      <span class="chip hidden" id="svcProdTag">PRODUCER</span>
+    </div>
+
+    <!-- event payload card -->
+    <div class="node json-card hidden" id="svcJson">
+      <div class="jc-hd">EVENT PAYLOAD</div>
+      <pre>{
+  <span class="k">"event"</span>: <span class="s">"PaymentCompleted"</span>,
+  <span class="k">"transactionId"</span>: <span class="s">"TXN1001"</span>,
+  <span class="k">"amount"</span>: <span class="n">500</span>,
+  <span class="k">"status"</span>: <span class="s">"SUCCESS"</span>
+}</pre>
+    </div>
+
+    <div class="callout hidden" id="prodCallout" style="left:467px;top:240px;width:156px">
+      <div class="co-label">PRODUCER</div>
+      <div class="co-line"></div>
+    </div>
+
+    <!-- ============ KAFKA ============ -->
+    <div class="node" id="kafka" style="left:840px;top:250px;width:380px;height:330px">
+      <div class="hd">
+        <span class="ic" style="background:var(--kafka-soft);color:var(--kafka-ink)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 7h9M4 12h13M4 17h6"/><circle cx="17.5" cy="7" r="1.8" fill="currentColor" stroke="none"/><circle cx="20.5" cy="17" r="1.8" fill="currentColor" stroke="none"/></svg>
+        </span>
+        KAFKA <span class="ksub">event streaming</span>
+      </div>
+    </div>
+
+    <!-- kafka interior layers (world-sized overlays) -->
+    <div class="kv" id="kvMain">
+      <div class="topic-label" id="topicLabel">payments</div>
+      <div class="shelf"></div>
+      <span class="mini-xw hidden" id="kafkaChip" style="left:988px;top:403px">✉ TXN1001</span>
+    </div>
+    <div class="kv" id="kvPart">
+      <div class="kv-title">payments topic</div>
+      <div class="lane" style="top:322px"><span>Partition 0</span></div>
+      <div class="lane" style="top:398px"><span>Partition 1</span></div>
+      <div class="lane" style="top:474px"><span>Partition 2</span></div>
+    </div>
+    <div class="kv" id="kvOffset">
+      <div class="kv-title">Partition 0</div>
+      <div class="orow" style="top:340px"><span class="ochip">Offset 0</span><span class="mini-wide">✉ TXN0999</span></div>
+      <div class="orow" style="top:400px"><span class="ochip">Offset 1</span><span class="mini-wide">✉ TXN1000</span></div>
+      <div class="orow" id="orow2" style="top:460px"><span class="ochip">Offset 2</span><span class="slot-wide"></span><span class="check">✓ read</span></div>
+      <div class="orow" style="top:520px"><span class="ochip">Offset 3</span><span class="mini-wide dashed">✉ TXN1002 (next)</span></div>
+    </div>
+    <div class="kv" id="kvBroker">
+      <div class="kv-title">Kafka cluster</div>
+      <div class="bbox" style="top:340px">Broker 1</div>
+      <div class="bbox" style="top:410px">Broker 2</div>
+      <div class="bbox" style="top:480px">Broker 3</div>
+      <span class="mini-xw hidden" id="b1Chip" style="left:1074px;top:356px">✉ TXN1001</span>
+      <span class="mini-xw hidden" id="b2Chip" style="left:1074px;top:426px">✉ TXN1001</span>
+    </div>
+    <div class="kv" id="kvOrder">
+      <div class="kv-title">Partition 0 · one transaction</div>
+      <div class="orow" style="top:340px"><span class="ochip">Offset 10</span><span class="slot-wide"></span><span class="check" id="orowC0">✓ read</span></div>
+      <div class="orow" style="top:414px"><span class="ochip">Offset 11</span><span class="slot-wide"></span><span class="check" id="orowC1">✓ read</span></div>
+      <div class="orow" style="top:488px"><span class="ochip">Offset 12</span><span class="slot-wide"></span><span class="check" id="orowC2">✓ read</span></div>
+    </div>
+    <div class="kv" id="kvLag">
+      <div class="kv-title">payments · incoming traffic</div>
+      <div id="lagQueue"></div>
+      <div class="lagc" id="lagConsumer"><b>Consumer</b><span id="lagConsumerSt">idle</span></div>
+      <div class="lagnum">Consumer Lag: <b id="lagNum">0</b></div>
+      <span class="chip warn hidden" id="lagBoost" style="position:absolute;left:880px;top:536px">⚡ consumer scaled up</span>
+    </div>
+
+    <!-- ============ CONSUMER SERVICES ============ -->
+    <div class="node cons" id="bank" style="left:1390px;top:180px;width:190px;height:110px">
+      <div class="hd"><span class="ic" style="background:var(--green-soft);color:var(--green-ink)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9.2 12 3l9 6.2v1.3H3zM5.2 12h3v7h-3zm5.3 0h3v7h-3zm5.3 0h3v7h-3zM2.5 20h19v1.6h-19z"/></svg>
+      </span> Bank</div>
+      <span class="chip" id="bankStatus">idle</span>
+    </div>
+    <div class="node cons" id="txnS" style="left:1390px;top:380px;width:190px;height:110px">
+      <div class="hd"><span class="ic" style="background:var(--orange-soft);color:var(--orange-ink)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h9l4 4V21.5H6zM14 2.5v5h5M9 12h6M9 16h6"/></svg>
+      </span> Transaction</div>
+      <span class="chip" id="txnSStatus">idle</span>
+    </div>
+    <div class="node cons" id="notif" style="left:1390px;top:580px;width:190px;height:110px">
+      <div class="hd"><span class="ic" style="background:#e9f0fc;color:#3565c0">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5a6 6 0 0 0-6 6v4.2l-2 3.3h16l-2-3.3V8.5a6 6 0 0 0-6-6zM9.8 19a2.3 2.3 0 0 0 4.4 0z"/></svg>
+      </span> Notification</div>
+      <span class="chip" id="notifStatus">idle</span>
+    </div>
+    <div class="node cons hidden" id="fraud" style="left:1390px;top:56px;width:190px;height:86px">
+      <div class="hd" style="padding-top:10px"><span class="ic" style="background:#fdeeee;color:#b03a37">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 4 5.5v5c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-5zM12 6.5l-1 5h2z"/></svg>
+      </span> Fraud</div>
+      <span class="chip" id="fraudStatus">idle</span>
+    </div>
+    <div class="node cons hidden" id="analytics" style="left:1390px;top:724px;width:190px;height:86px">
+      <div class="hd" style="padding-top:10px"><span class="ic" style="background:#efe9fb;color:#6a4bc0">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 20v-6M11 20V6M17 20v-9M3.5 20.5h17"/></svg>
+      </span> Analytics</div>
+      <span class="chip" id="analyticsStatus">idle</span>
+    </div>
+
+    <!-- ============ CONSUMER GROUP ============ -->
+    <div class="node hidden" id="groupBox" style="left:840px;top:650px;width:380px;height:190px">
+      <div class="hd">
+        <span class="ic" style="background:var(--indigo-soft);color:var(--indigo-ink)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8.5" cy="8" r="3.4"/><circle cx="16.5" cy="9" r="2.8"/><path d="M2.5 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5zM15.5 19c0-2 1.2-3.6 3-4.4.4 1.9.2 3.6-.4 4.4z"/></svg>
+        </span>
+        CONSUMER GROUP
+      </div>
+      <div class="grp-chips">
+        <span class="gchip"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7.5" r="4"/><path d="M4.5 21c0-4.1 3.4-6.8 7.5-6.8s7.5 2.7 7.5 6.8z"/></svg> Consumer 1</span>
+        <span class="gchip"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7.5" r="4"/><path d="M4.5 21c0-4.1 3.4-6.8 7.5-6.8s7.5 2.7 7.5 6.8z"/></svg> Consumer 2</span>
+        <span class="gchip"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7.5" r="4"/><path d="M4.5 21c0-4.1 3.4-6.8 7.5-6.8s7.5 2.7 7.5 6.8z"/></svg> Consumer 3</span>
+      </div>
+      <div id="grpAssign">Partition 0 → Consumer 1 &nbsp;·&nbsp; Partition 1 → Consumer 2 &nbsp;·&nbsp; Partition 2 → Consumer 3</div>
+    </div>
+    <div class="node hidden" id="grpSecond" style="left:1240px;top:700px;width:180px;height:62px">
+      <b>Notification Group</b><span>reads the same topic</span>
+    </div>
+
+    <!-- duplicate note -->
+    <div class="node hidden" id="dupNote"><b>⚠ Duplicate detected</b><span>Already processed → no second business action</span></div>
+
+  </div><!-- /world -->
+
+  <!-- screen-fixed overlays -->
+  <div id="statement" class="hidden"><div class="st-main"></div><div class="st-sub"></div></div>
+  <div id="card" class="screen-card hidden"></div>
+  <div id="qaPanel" class="screen-card hidden"><div class="qa-title">QA CHECK</div><div id="qaItems"></div></div>
+  <div id="testCard" class="screen-card hidden"></div>
+  <div id="statusList" class="screen-card hidden">
+    <div class="sl-title">SYSTEM STATUS</div>
+    <div class="sl-row"><span>Bank</span><b class="okc">✓</b></div>
+    <div class="sl-row"><span>Transaction</span><b class="okc">✓</b></div>
+    <div class="sl-row"><span>Kafka</span><b class="okc">✓</b></div>
+    <div class="sl-note" id="slNote">TXN1001 is safe in Kafka</div>
+  </div>
+  <div id="footNote">eSewa-inspired educational example · not a real architecture</div>
+</div>
+
+<footer>
+  <div class="info">
+    <div class="info-label">WHAT JUST HAPPENED?</div>
+    <div id="infoText"></div>
+    <div id="concept" class="hidden"><span class="c-name"></span><span class="c-line"></span></div>
+  </div>
+  <div class="controls">
+    <div id="secondaries"></div>
+    <button id="primaryBtn"></button>
+    <div class="mini-nav">
+      <button id="backBtn">← Back</button>
+      <button id="replayBtn">Replay</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+  </div>
+</footer>
+
+<script>
+'use strict';
+/* ================= utilities ================= */
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const lerp  = (a, b, t) => a + (b - a) * t;
+const easeInOut = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+function qbez(a, c, b, t){ const u = 1 - t; return { x: u*u*a.x + 2*u*t*c.x + t*t*b.x, y: u*u*a.y + 2*u*t*c.y + t*t*b.y }; }
+function el(tag, cls){ const d = document.createElement(tag); if (cls) d.className = cls; return d; }
+
+let GEN = 0;
+const alive = g => GEN === g;
+function cancelAll(){ GEN++; }
+
+/* promise-based tween; resolves false if the step changes mid-flight */
+function tweenP({ dur = 1000, ease = easeInOut, onUpdate, onDone }){
+  return new Promise(res => {
+    const g = GEN, t0 = performance.now();
+    function frame(now){
+      if (g !== GEN){ res(false); return; }
+      const k = Math.min(1, (now - t0) / dur);
+      if (onUpdate) onUpdate(ease(k), k);
+      if (k < 1) requestAnimationFrame(frame);
+      else { if (onDone) onDone(); res(true); }
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+/* ================= camera ================= */
+const stage = $('#stage'), world = $('#world');
+let baseScale = 1;
+function fit(){ baseScale = Math.min(stage.clientWidth / 1600, stage.clientHeight / 900) * 0.98; }
+const CAM = { x: 800, y: 450, s: 1 };
+function applyCam(){
+  const s = baseScale * CAM.s;
+  world.style.transform = `translate(${stage.clientWidth/2 - CAM.x*s}px, ${stage.clientHeight/2 - CAM.y*s}px) scale(${s})`;
+}
+const CAMS = {
+  full:      { x: 800,  y: 450, s: 1    },
+  person:    { x: 190,  y: 450, s: 1.95 },
+  corridor1: { x: 370,  y: 455, s: 1.5  },
+  service:   { x: 545,  y: 462, s: 1.9  },
+  corridor2: { x: 930,  y: 440, s: 1.45 },
+  kafka:     { x: 1030, y: 415, s: 2.2  },
+  consumers: { x: 1255, y: 420, s: 1.35 },
+  fanout:    { x: 1235, y: 415, s: 1.22 },
+  group:     { x: 1030, y: 630, s: 1.55 },
+  notif:     { x: 1470, y: 630, s: 1.75 },
+  failWide:  { x: 1310, y: 500, s: 1.32 }
+};
+function camTo(name, dur = 900){
+  const c = CAMS[name] || CAMS.full;
+  const f = { ...CAM };
+  return tweenP({ dur, onUpdate: t => { CAM.x = lerp(f.x, c.x, t); CAM.y = lerp(f.y, c.y, t); CAM.s = lerp(f.s, c.s, t); applyCam(); } });
+}
+
+/* ================= envelopes & dynamic bits ================= */
+const dyn = new Set();
+function addDyn(node){ world.appendChild(node); dyn.add(node); return node; }
+function clearDyn(){ dyn.forEach(n => n.remove()); dyn.clear(); }
+function place(node, x, y, w, h, s = 1){
+  node.style.transform = `translate(${x - w/2}px, ${y - h/2}px) scale(${s})`;
+}
+const ENV_ICON = '<svg class="e-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M3.5 6.5l8.5 6 8.5-6"/></svg>';
+function makeEnv(kind, t1, t2, opts = {}){
+  const d = document.createElement('div');
+  d.className = 'env env-' + kind + (opts.small ? ' env-small' : '') + (opts.dup ? ' env-dup' : '');
+  d.innerHTML = ENV_ICON + '<span class="e-t1"></span><span class="e-t2"></span>';
+  d.querySelector('.e-t1').textContent = t1;
+  const t2n = d.querySelector('.e-t2');
+  if (t2){ t2n.textContent = t2; } else { t2n.style.display = 'none'; }
+  return d;
+}
+function fly({ from, to, ctrl = null, dur = 1200, kind = 'request', t1, t2, small = false, dup = false, onArrive }){
+  const e = addDyn(makeEnv(kind, t1, t2, { small, dup }));
+  const sz = small ? { w: 110, h: 46 } : { w: 136, h: 56 };
+  place(e, from.x, from.y, sz.w, sz.h);
+  e.style.opacity = '0';
+  requestAnimationFrame(() => { e.style.transition = 'opacity .25s'; e.style.opacity = '1'; });
+  return tweenP({
+    dur,
+    onUpdate: t => {
+      const p = ctrl ? qbez(from, ctrl, to, t) : { x: lerp(from.x, to.x, t), y: lerp(from.y, to.y, t) };
+      place(e, p.x, p.y, sz.w, sz.h);
+    },
+    onDone: () => { if (onArrive) onArrive(e); }
+  });
+}
+function vanish(e, ms = 350){ e.style.transition = 'opacity .3s'; e.style.opacity = '0'; setTimeout(() => e.remove(), ms); }
+
+/* ================= lines ================= */
+const gLines = $('#gLines');
+function addPath(d, { stroke = '#e8833c', width = 3, dash = null, opacity = 1, dur = 500 } = {}){
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', d);
+  p.setAttribute('stroke', stroke);
+  p.setAttribute('stroke-width', width);
+  p.setAttribute('fill', 'none');
+  gLines.appendChild(p);
+  const L = p.getTotalLength();
+  p.style.strokeDasharray = dash || L;
+  p.style.strokeDashoffset = dash ? 0 : L;
+  p.style.opacity = 0;
+  return tweenP({ dur, onUpdate: t => { p.style.strokeDashoffset = dash ? 0 : L * (1 - t); p.style.opacity = opacity; } });
+}
+function fadeLines(op = 0){
+  $$('#gLines path').forEach(p => { p.style.transition = 'opacity .45s'; p.style.opacity = op; });
+  return sleep(480);
+}
+function clearLines(){ gLines.innerHTML = ''; }
+
+/* ================= chrome helpers ================= */
+function setInfo(t){
+  const i = $('#infoText');
+  i.textContent = t;
+  i.classList.remove('fade'); void i.offsetWidth; i.classList.add('fade');
+}
+function chipTone(text){
+  if (!text) return '';
+  if (text.includes('✕') || text.includes('OFFLINE')) return 'bad';
+  if (text.includes('…') || text.includes('⚠')) return 'warn';
+  if (text.includes('✓')) return 'ok';
+  return '';
+}
+function setChip(node, text, tone){
+  node.textContent = text;
+  node.className = 'chip' + (tone ? ' ' + tone : '');
+}
+function showChip(node){ node.classList.remove('hidden'); }
+function showText(node){ node.classList.add('show'); }
+function pingKafka(){
+  const k = $('#kafka');
+  k.classList.remove('ping'); void k.offsetWidth; k.classList.add('ping');
+}
+function showStatement(main, sub = ''){
+  const s = $('#statement');
+  s.querySelector('.st-main').textContent = main;
+  const ss = s.querySelector('.st-sub');
+  ss.textContent = sub; ss.style.display = sub ? 'block' : 'none';
+  s.classList.remove('hidden', 'st-in'); void s.offsetWidth; s.classList.add('st-in');
+}
+function hideStatement(){ $('#statement').classList.add('hidden'); }
+function setQA(items){
+  const box = $('#qaItems');
+  box.innerHTML = '';
+  items.forEach(it => {
+    const d = el('div', 'qa-item');
+    d.innerHTML = '<span class="qa-ic"></span><span>' + it + '</span>';
+    box.appendChild(d);
+  });
+  $('#qaPanel').classList.remove('hidden');
+}
+function markQA(i){
+  const it = $$('#qaItems .qa-item')[i];
+  if (!it) return;
+  it.classList.add('done');
+  it.querySelector('.qa-ic').textContent = '✓';
+}
+function hideQA(){ $('#qaPanel').classList.add('hidden'); }
+function fillTestCard(id, name, txn){
+  $('#testCard').innerHTML = '<div class="tc-id">' + id + '</div><div class="tc-name">' + name + '</div><div class="tc-sub">' + txn + '</div>';
+}
+function hideCard(){ $('#card').classList.add('hidden'); }
+function setPrimary(label, run, disabled = false){
+  const b = $('#primaryBtn');
+  b.textContent = label;
+  b.disabled = !!disabled;
+  b.onclick = run;
+}
+
+/* ================= phone ================= */
+function phoneScreen(mode){
+  const p = $('#person');
+  p.classList.remove('ph-wallet', 'ph-proc', 'ph-txn', 'ph-ok');
+  p.classList.add('ph-' + mode);
+}
+let FINGER = { x: 285, y: 440 };
+function fingerSet(x, y){ FINGER = { x, y }; $('#fingerG').setAttribute('transform', `translate(${x},${y})`); }
+function fingerTo(x, y, dur = 600){
+  const f = { ...FINGER };
+  return tweenP({ dur, onUpdate: t => fingerSet(lerp(f.x, x, t), lerp(f.y, y, t)) });
+}
+async function tapButton(){
+  $('#fingerG').classList.add('show');
+  await sleep(120);
+  $('#payBtnG').classList.add('pressed');
+  await sleep(150);
+  $('#payBtnG').classList.remove('pressed');
+  const r = $('#payRipG');
+  r.classList.remove('go'); void r.getBoundingClientRect(); r.classList.add('go');
+  await sleep(420);
+}
+function setChipSvcChip(mode){
+  const c = $('#svcChip');
+  if (mode === 'ev'){ c.classList.add('ev'); c.innerHTML = '✉&nbsp; PaymentCompleted · TXN1001'; }
+  else { c.classList.remove('ev'); c.innerHTML = '✉&nbsp; TXN1001'; }
+  showChip(c);
+}
+
+/* ================= kafka views ================= */
+const KVSEL = { main: '#kvMain', part: '#kvPart', offset: '#kvOffset', broker: '#kvBroker', order: '#kvOrder', lag: '#kvLag' };
+function setKafkaView(v){ $$('.kv').forEach(k => k.classList.toggle('on', k.id === KVSEL[v].slice(1))); }
+
+/* ================= key points ================= */
+const P = {
+  phoneOut:  { x: 238,  y: 470 },
+  svcIn:     { x: 470,  y: 465 },
+  svcCenter: { x: 545,  y: 465 },
+  svcRight:  { x: 668,  y: 445 },
+  kafkaLeft: { x: 852,  y: 415 },
+  kafkaRight:{ x: 1208, y: 415 },
+  topicSlot: { x: 1030, y: 412 },
+  p0Slot:    { x: 1030, y: 350 },
+  offset2:   { x: 1060, y: 485 },
+  bankIn:    { x: 1392, y: 235 },
+  txnIn:     { x: 1392, y: 435 },
+  notifIn:   { x: 1392, y: 635 }
+};
+const FAN = {
+  bank:  { d: 'M1222 400 C 1310 400, 1315 260, 1388 235', to: P.bankIn,  ctrl: { x: 1315, y: 260 } },
+  txnS:  { d: 'M1222 415 C 1290 415, 1305 425, 1388 435', to: P.txnIn,   ctrl: { x: 1305, y: 425 } },
+  notif: { d: 'M1222 430 C 1310 430, 1315 570, 1388 635', to: P.notifIn, ctrl: { x: 1315, y: 570 } }
+};
+const NAMES = { bank: '→ Bank', txnS: '→ Transaction', notif: '→ Notification' };
+async function consumeSeq(ids, g){
+  for (const id of ids){
+    if (!alive(g)) return;
+    setChip($('#' + id + 'Status'), 'Receiving…', 'info');
+    await fly({ from: { x: 1222, y: 415 }, to: FAN[id].to, ctrl: FAN[id].ctrl, dur: 1100, kind: 'event', t1: 'TXN1001', t2: NAMES[id], small: true, onArrive: vanish });
+    if (!alive(g)) return;
+    setChip($('#' + id + 'Status'), 'Processing…', 'warn');
+    await sleep(650); if (!alive(g)) return;
+    setChip($('#' + id + 'Status'), '✓ Complete', 'ok');
+  }
+}
+
+/* ================= step definitions ================= */
+const FLOW = ['intro','payment','request','service','event','producer','publish','topic','partition','offset','broker','replication','mainview','consumer','oneEvent','group','compare','async','failure','recovery','duplicate','ordering','lag','qaMode','qaTest','failureTest','finalReplay','summary','check','done'];
+const STAGE_OF = { intro:0, payment:0, request:0, service:0, event:1, producer:1, publish:1, topic:2, partition:2, offset:2, broker:2, replication:2, mainview:2, consumer:3, oneEvent:3, group:3, compare:3, async:3, failure:4, recovery:4, duplicate:4, ordering:4, lag:4, qaMode:5, qaTest:5, failureTest:5, finalReplay:5, summary:5, check:5, done:5 };
+const IDLE  = { bank: 'idle', txnS: 'idle', notif: 'idle' };
+const DONEC = { bank: '✓ Complete', txnS: '✓ Complete', notif: '✓ Complete' };
+const DIMK  = ['svc','kafka','bank','txnS','notif'];
+const DIMO  = ['svc','bank','txnS','notif'];
+
+const BASE = {
+  intro:       { cam:'person', phone:'wallet', dim:DIMK, svc:'—', cons:IDLE, kview:'main', info:'A user opens the payment app and prepares to send Rs. 500. This journey follows one payment — TXN1001.', primary:{ label:'MAKE PAYMENT', run: next } },
+  payment:     { cam:'person', phone:'wallet', dim:DIMK, svc:'—', cons:IDLE, kview:'main', info:'The user tapped Pay. The payment succeeded — transaction TXN1001 for Rs. 500.' },
+  request:     { cam:'corridor1', phone:'ok', dim:['kafka','bank','txnS','notif'], svc:'—', cons:IDLE, kview:'main', concept:{ name:'REQUEST', line:'A request asks a service to do something — it exists for one call.' }, info:'The app sent a payment request — a small message carrying TXN1001 and Rs. 500 — to the Payment Service.' },
+  service:     { cam:'service', phone:'ok', dim:DIMO, svc:'Received ✓', svcChip:'plain', cons:IDLE, kview:'main', info:'The Payment Service received the request. Next, it will publish an event to Kafka.' },
+  event:       { cam:'service', phone:'ok', dim:DIMO, svc:'Processing…', svcChip:'plain', cons:IDLE, kview:'main', concept:{ name:'EVENT', line:'A record of something that happened in your system.' }, info:'The request became an event — a record that something happened: PaymentCompleted for TXN1001.' },
+  producer:    { cam:'service', phone:'ok', dim:DIMO, svc:'Ready to publish', svcChip:'ev', cons:IDLE, kview:'main', concept:{ name:'PRODUCER', line:'Publishes events to Kafka topics.' }, info:'A Producer is the application that publishes events to Kafka. Here, the Payment Service is the producer.' },
+  publish:     { cam:'corridor2', phone:'ok', dim:['bank','txnS','notif'], svc:'Published ✓', svcChip:'ev', cons:IDLE, kview:'main', concept:{ name:'KAFKA', line:'A distributed event-streaming platform.' }, info:'Kafka receives and stores events so other applications can consume them.' },
+  topic:       { cam:'kafka', phone:'ok', dim:DIMO, svc:'Published ✓', svcChip:'ev', cons:IDLE, kview:'main', concept:{ name:'TOPIC', line:'A named category where related events are published.' }, info:'Inside Kafka, the event is stored in a topic called payments.', primary:{ label:'LOOK INSIDE KAFKA', run: next }, secondaries:['explore'] },
+  partition:   { cam:'kafka', phone:'ok', dim:DIMO, svc:'Published ✓', svcChip:'ev', cons:IDLE, kview:'part', concept:{ name:'PARTITION', line:'Partitions let Kafka store and process events in parallel.' }, info:'The payments topic is divided into partitions — TXN1001 landed in Partition 0.', secondaries:['explore'] },
+  offset:      { cam:'kafka', phone:'ok', dim:DIMO, svc:'Published ✓', svcChip:'ev', cons:IDLE, kview:'offset', concept:{ name:'OFFSET', line:'The event’s position inside its partition.' }, info:'Every event gets an offset — its position inside the partition. TXN1001 sits at Offset 2.', secondaries:['explore'] },
+  broker:      { cam:'kafka', phone:'ok', dim:DIMO, svc:'Published ✓', svcChip:'ev', cons:IDLE, kview:'broker', concept:{ name:'BROKER', line:'A Kafka server that stores and serves event data.' }, info:'A broker is a Kafka server. Multiple brokers together form a Kafka cluster.', secondaries:['explore'] },
+  replication: { cam:'kafka', phone:'ok', dim:DIMO, svc:'Published ✓', svcChip:'ev', cons:IDLE, kview:'broker', b1:true, concept:{ name:'REPLICATION', line:'Copies of data on multiple brokers for fault tolerance.' }, info:'Kafka keeps replicas of data on other brokers, so the data survives a failure.', secondaries:['explore'] },
+  mainview:    { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, info:'Zooming back out — the same system. TXN1001 is now stored safely in Kafka.' },
+  consumer:    { cam:'consumers', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:{ bank:'—', txnS:'—', notif:'—' }, kview:'main', chip:true, concept:{ name:'CONSUMER', line:'An application that reads and processes events from Kafka.' }, info:'Three services read the same event from Kafka — each independently, at its own pace.', secondaries:['explore'] },
+  oneEvent:    { cam:'fanout', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, info:'One event, stored once in Kafka, can be used by any number of consumers.', secondaries:['compare'] },
+  group:       { cam:'group', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, group:true, concept:{ name:'CONSUMER GROUP', line:'Consumers in one group share partitions; different groups read the topic independently.' }, info:'A consumer group shares the work — each partition is handled by one member. Other groups read the same events independently.', secondaries:['explore'] },
+  compare:     { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, compare:true, info:'Without Kafka, every producer needs a direct connection to every consumer — it gets hard to follow.', primary:{ label:'USE KAFKA', run: useKafka } },
+  async:       { cam:'consumers', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, concept:{ name:'ASYNCHRONOUS', line:'The producer does not wait for consumers to finish.' }, info:'The producer publishes and moves on — consumers process events asynchronously, in parallel.' },
+  failure:     { cam:'notif', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:{ bank:'✓ Complete', txnS:'✓ Complete', notif:'—' }, kview:'main', chip:true, info:'Notification Service is offline — but TXN1001 is still safely stored in Kafka.', primary:{ label:'BREAK NOTIFICATION SERVICE', run: breakNotif } },
+  recovery:    { cam:'failWide', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:{ bank:'✓ Complete', txnS:'✓ Complete', notif:'OFFLINE ✕' }, kview:'main', chip:true, notifOffline:true, statusList:true, slNote:'TXN1001 is safe in Kafka', concept:{ name:'RETENTION', line:'Kafka keeps events for a period of time, so recovering consumers can still read them.' }, info:'It came back and read the event Kafka had been holding for it — nothing was lost.' },
+  duplicate:   { cam:'consumers', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, concept:{ name:'IDEMPOTENCY', line:'Handling repeated events without duplicate business effects.' }, info:'Kafka can deliver an event more than once. Applications must process events safely — idempotently.', primary:{ label:'SEND DUPLICATE', run: sendDup } },
+  ordering:    { cam:'kafka', phone:'ok', dim:DIMO, svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'order', concept:{ name:'ORDERING', line:'Order is preserved within a partition — not global across all partitions.' }, info:'Within one partition, events are consumed in the order they were produced. Note: ordering is not global across all partitions.' },
+  lag:         { cam:'kafka', phone:'ok', dim:DIMO, svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'lag', concept:{ name:'CONSUMER LAG', line:'The consumer is behind the rate of incoming events.' }, info:'Consumer lag is the gap between produced events and consumed events. Faster or more consumers close the gap.', primary:{ label:'SIMULATE HIGH TRAFFIC', run: simLag } },
+  qaMode:      { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, qa:['Payment request','Event payload','Topic','Partition','Consumer','Business result'], info:'QA follows the same journey as the event and verifies each checkpoint.' },
+  qaTest:      { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:IDLE, kview:'main', chip:true, testCard:'TC-KAFKA-001|Make Rs. 500 payment|TXN1001', info:'QA replays the journey automatically and checks every step.' },
+  failureTest: { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, testCard:'TC-KAFKA-002|Failure recovery|TXN1001', info:'QA also tests what happens when a service fails — and recovers.' },
+  finalReplay: { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, info:'The complete journey, from tap to processed — watch TXN1001 all the way.', primary:{ label:'PLAY COMPLETE JOURNEY', run: playFull } },
+  summary:     { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, card:'summary', info:'The same journey, summarized.' },
+  check:       { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, card:'quiz', info:'A quick check — six short questions about the journey.', primary:{ label:'NEXT QUESTION →', run: quizNext, disabled:true } },
+  done:        { cam:'full', phone:'ok', svc:'Published ✓', svcChip:'ev', cons:DONEC, kview:'main', chip:true, card:'done', info:'One payment. One event. One continuous journey.', primary:{ label:'START OVER', run: resetAll } }
+};
+
+/* ================= base application (normalizes world for a step) ================= */
+function applyBase(id){
+  cancelAll();
+  hideStatement(); hideCard(); hideQA();
+  $('#statusList').classList.add('hidden');
+  $('#testCard').classList.add('hidden');
+  $('#testCard').classList.remove('passed');
+  clearDyn(); clearLines();
+  setKafkaView((BASE[id].kview) || 'main');
+  phoneScreen(BASE[id].phone || 'ok');
+  fingerSet(285, 440);
+  $('#fingerG').classList.remove('show');
+  $('#svcJson').classList.add('hidden');
+  $('#svcJson').classList.remove('pop');
+  $('#prodCallout').classList.add('hidden'); $('#prodCallout').classList.remove('in');
+  $('#dupNote').classList.add('hidden'); $('#dupNote').classList.remove('in');
+  $('#kafkaChip').classList.add('hidden');
+  $('#b1Chip').classList.add('hidden');
+  $('#b2Chip').classList.add('hidden');
+  $('#grpAssign').classList.remove('show');
+  $$('.lane, .orow').forEach(x => x.classList.remove('hl'));
+  $$('.check').forEach(x => x.classList.remove('show'));
+  $('#topicLabel').classList.remove('pulse');
+
+  const b = BASE[id];
+  setChip($('#svcStatus'), b.svc || '—', chipTone(b.svc));
+  $('#svcChip').classList.add('hidden'); $('#svcChip').classList.remove('ev');
+  $('#svcProdTag').classList.add('hidden');
+
+  const cs = b.cons || IDLE;
+  for (const k of ['bank','txnS','notif']){
+    setChip($('#' + k + 'Status'), cs[k], chipTone(cs[k]));
+    $('#' + k).classList.remove('offline');
+  }
+  if (b.notifOffline) $('#notif').classList.add('offline');
+  if (b.statusList) $('#statusList').classList.remove('hidden');
+  if (b.slNote) $('#slNote').textContent = b.slNote;
+
+  if (b.chip) $('#kafkaChip').classList.remove('hidden');
+  if (b.b1) $('#b1Chip').classList.remove('hidden');
+
+  $('#groupBox').classList.toggle('hidden', !b.group);
+  $('#groupBox').classList.remove('in');
+  $('#grpSecond').classList.add('hidden'); $('#grpSecond').classList.remove('in');
+  $('#fraud').classList.toggle('hidden', !b.compare);
+  $('#analytics').classList.toggle('hidden', !b.compare);
+
+  const dim = b.dim || [];
+  for (const n of DIMK) $('#' + n).classList.toggle('is-dim', dim.includes(n));
+
+  $('#lagQueue').innerHTML = '';
+  $('#lagNum').textContent = '0';
+  $('#lagNum').parentElement.classList.remove('hot');
+  $('#lagConsumerSt').textContent = 'idle';
+  $('#lagBoost').classList.add('hidden');
+
+  if (b.svcChip) setChipSvcChip(b.svcChip);
+  if (b.qa) setQA(b.qa);
+  if (b.testCard){
+    const [a, c, d] = b.testCard.split('|');
+    fillTestCard(a, c, d);
+  }
+  if (b.card) showCardFor(b.card);
+}
+
+/* ================= step entry animations ================= */
+const ENTER = {
+  async intro(){},
+  async payment(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    if (!await ok(450)) return;
+    await fingerTo(166, 337, 700); if (!alive(g)) return;
+    await tapButton(); if (!alive(g)) return;
+    phoneScreen('proc'); await ok(850); if (!alive(g)) return;
+    phoneScreen('txn');  await ok(600); if (!alive(g)) return;
+    phoneScreen('ok');   await ok(450); if (!alive(g)) return;
+    fingerTo(285, 440, 700);
+    $('#fingerG').classList.remove('show');
+  },
+  async request(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    setChip($('#svcStatus'), 'Receiving…', 'info');
+    await fly({ from: P.phoneOut, to: P.svcIn, dur: 1400, kind: 'request', t1: 'PAYMENT REQUEST', t2: 'TXN1001 · Rs. 500',
+      onArrive: e => {
+        tweenP({ dur: 480, onUpdate: t => {
+          place(e, lerp(P.svcIn.x, P.svcCenter.x, t), 465, 136, 56, lerp(1, .45, t));
+          e.style.opacity = String(1 - t * .9);
+        }}).then(() => e.remove());
+      }});
+    if (!alive(g)) return;
+    await ok(250);
+    setChip($('#svcStatus'), 'Received ✓', 'ok');
+    setChipSvcChip('plain');
+  },
+  async service(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(550); if (!alive(g)) return;
+    $('#svcProdTag').classList.remove('hidden');
+    setChip($('#svcProdTag'), 'PRODUCER', 'info');
+  },
+  async event(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    setChipSvcChip('plain');
+    setChip($('#svcStatus'), 'Processing…', 'info');
+    await ok(950); if (!alive(g)) return;
+    setChipSvcChip('ev');
+    await ok(450); if (!alive(g)) return;
+    const j = $('#svcJson');
+    j.classList.remove('hidden'); j.classList.add('pop');
+    setChip($('#svcStatus'), 'Event ready', 'ok');
+  },
+  async producer(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(500); if (!alive(g)) return;
+    const c = $('#prodCallout');
+    c.classList.remove('hidden');
+    requestAnimationFrame(() => c.classList.add('in'));
+  },
+  async publish(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    setChip($('#svcStatus'), 'Published ✓', 'ok');
+    $('#svcJson').classList.add('hidden');
+    await ok(450); if (!alive(g)) return;
+    await fly({ from: P.svcRight, to: P.kafkaLeft, dur: 1500, kind: 'event', t1: 'PaymentCompleted', t2: 'TXN1001', onArrive: e => { vanish(e); pingKafka(); } });
+  },
+  async topic(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(650); if (!alive(g)) return;
+    await fly({ from: { x: 852, y: 415 }, to: P.topicSlot, dur: 950, kind: 'event', t1: 'PaymentCompleted', t2: 'TXN1001', small: true });
+    if (!alive(g)) return;
+    $('#topicLabel').classList.add('pulse');
+  },
+  async partition(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(700); if (!alive(g)) return;
+    await fly({ from: { x: 1030, y: 268 }, to: P.p0Slot, dur: 900, kind: 'event', t1: 'TXN1001', t2: 'PaymentCompleted', small: true, ctrl: { x: 1030, y: 300 } });
+    if (!alive(g)) return;
+    $$('.lane')[0].classList.add('hl');
+  },
+  async offset(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(700); if (!alive(g)) return;
+    await fly({ from: { x: 1030, y: 300 }, to: P.offset2, dur: 850, kind: 'event', t1: 'TXN1001', t2: 'Offset 2', small: true, ctrl: { x: 1030, y: 350 } });
+    if (!alive(g)) return;
+    $('#orow2').classList.add('hl');
+    await ok(550); if (!alive(g)) return;
+    const ptr = addDyn(el('div', 'ptr'));
+    ptr.innerHTML = '▼&nbsp; consumer';
+    place(ptr, 940, 485, 120, 30);
+    await ok(750); if (!alive(g)) return;
+    await tweenP({ dur: 650, onUpdate: t => place(ptr, 940, lerp(485, 545, t), 120, 30) });
+    if (!alive(g)) return;
+    $('#orow2 .check').classList.add('show');
+  },
+  async broker(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(650); if (!alive(g)) return;
+    await fly({ from: { x: 880, y: 368 }, to: { x: 1116, y: 368 }, dur: 750, kind: 'event', t1: 'TXN1001', small: true,
+      onArrive: e => { vanish(e); showChip($('#b1Chip')); } });
+  },
+  async replication(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(700); if (!alive(g)) return;
+    await addPath('M1100 398 C 1148 402, 1148 406, 1100 410', { stroke: '#e8833c', width: 2.5, dash: '5 5', dur: 450 });
+    if (!alive(g)) return;
+    const lab = addDyn(el('div', 'copylab'));
+    lab.textContent = 'copy';
+    place(lab, 1168, 404, 50, 22);
+    const c = addDyn(el('span', 'mini-xw'));
+    c.textContent = '✉ TXN1001';
+    place(c, 1116, 368, 84, 24);
+    await tweenP({ dur: 750, onUpdate: t => place(c, 1116, lerp(368, 438, t), 84, 24) });
+    if (!alive(g)) return;
+    c.remove();
+    showChip($('#b2Chip'));
+  },
+  async mainview(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(500); if (!alive(g)) return;
+    $('#kafkaChip').classList.remove('hidden');
+  },
+  async consumer(){
+    const g = GEN;
+    await addPath(FAN.bank.d, { stroke: '#e8833c', width: 2.5, dur: 380 }); if (!alive(g)) return;
+    await addPath(FAN.txnS.d, { stroke: '#e8833c', width: 2.5, dur: 300 }); if (!alive(g)) return;
+    await addPath(FAN.notif.d, { stroke: '#e8833c', width: 2.5, dur: 380 }); if (!alive(g)) return;
+    await consumeSeq(['bank','txnS','notif'], g);
+  },
+  async oneEvent(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    addPath(FAN.bank.d,  { stroke: '#e8833c', width: 2.5, opacity: .45, dur: 400 });
+    addPath(FAN.txnS.d,  { stroke: '#e8833c', width: 2.5, opacity: .45, dur: 400 });
+    addPath(FAN.notif.d, { stroke: '#e8833c', width: 2.5, opacity: .45, dur: 400 });
+    await ok(800); if (!alive(g)) return;
+    showStatement('ONE EVENT → MULTIPLE CONSUMERS', 'TXN1001, read by three services');
+  },
+  async group(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    const gb = $('#groupBox');
+    gb.classList.remove('hidden');
+    requestAnimationFrame(() => gb.classList.add('in'));
+    await ok(650); if (!alive(g)) return;
+    await addPath('M950 582 C 935 640, 915 665, 916 690',  { stroke: '#5b6bd6', width: 2.5, dur: 400 }); if (!alive(g)) return;
+    await addPath('M1030 582 L 1036 690',                    { stroke: '#5b6bd6', width: 2.5, dur: 320 }); if (!alive(g)) return;
+    await addPath('M1110 582 C 1125 640, 1148 665, 1156 690', { stroke: '#5b6bd6', width: 2.5, dur: 400 }); if (!alive(g)) return;
+    showText($('#grpAssign'));
+    await ok(800); if (!alive(g)) return;
+    const gs = $('#grpSecond');
+    gs.classList.remove('hidden');
+    requestAnimationFrame(() => gs.classList.add('in'));
+  },
+  async compare(){
+    const g = GEN;
+    const web = [
+      'M660 465 C 900 430, 1150 105, 1390 105',
+      'M660 460 C 950 440, 1180 235, 1390 235',
+      'M660 465 C 950 460, 1180 435, 1390 435',
+      'M660 470 C 950 490, 1180 635, 1390 635',
+      'M660 475 C 900 500, 1150 765, 1390 765',
+      'M1485 292 C 1555 390, 1555 530, 1485 578',
+      'M1485 492 C 1540 590, 1540 690, 1485 718'
+    ];
+    for (const d of web){
+      if (!alive(g)) return;
+      await addPath(d, { stroke: '#d9822b', width: 2, dash: '7 7', dur: 260, opacity: .8 });
+      await sleep(130);
+    }
+  },
+  async asyncStep(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    setChip($('#svcStatus'), 'Publishing…', 'info');
+    await fly({ from: P.svcRight, to: P.kafkaLeft, dur: 950, kind: 'event', t1: 'TXN1001', small: true, onArrive: e => { vanish(e); pingKafka(); } });
+    if (!alive(g)) return;
+    setChip($('#svcStatus'), 'Published ✓ · next request…', 'ok');
+    await ok(550); if (!alive(g)) return;
+    await fly({ from: P.phoneOut, to: P.svcIn, dur: 1000, kind: 'request', t1: 'TXN1002', t2: 'next request', small: true, onArrive: e => { vanish(e); } });
+    if (!alive(g)) return;
+    for (const id of ['bank','txnS','notif']){ if (!alive(g)) return; setChip($('#' + id + 'Status'), 'Processing…', 'warn'); }
+    await ok(1150); if (!alive(g)) return;
+    for (const id of ['bank','txnS','notif']){ if (!alive(g)) return; setChip($('#' + id + 'Status'), '✓ Complete', 'ok'); }
+  },
+  async failure(){},
+  async recovery(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    const n = $('#notif');
+    setChip($('#notifStatus'), 'Reconnecting…', 'warn');
+    await ok(1700); if (!alive(g)) return;
+    n.classList.remove('offline');
+    setChip($('#notifStatus'), 'ONLINE ✓', 'ok');
+    await ok(650); if (!alive(g)) return;
+    setChip($('#notifStatus'), 'Reading…', 'info');
+    await fly({ from: { x: 1222, y: 430 }, to: P.notifIn, ctrl: { x: 1330, y: 520 }, dur: 1350, kind: 'event', t1: 'TXN1001', t2: 'held by Kafka', small: true, onArrive: vanish });
+    if (!alive(g)) return;
+    setChip($('#notifStatus'), '✓ Processed', 'ok');
+    $('#slNote').textContent = 'All services back online';
+  },
+  async duplicate(){},
+  async ordering(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(650); if (!alive(g)) return;
+    const items = [ { t1: 'PaymentInitiated', y: 365 }, { t1: 'PaymentCompleted', y: 439 }, { t1: 'ReceiptGenerated', y: 513 } ];
+    for (const it of items){
+      if (!alive(g)) return;
+      await fly({ from: { x: 1030, y: 288 }, to: { x: 1060, y: it.y }, ctrl: { x: 1030, y: 330 }, dur: 720, kind: 'event', t1: it.t1, t2: 'TXN1001', small: true,
+        onArrive: e => { e.style.opacity = '.95'; } });
+      await sleep(260);
+    }
+    if (!alive(g)) return;
+    const ptr = addDyn(el('div', 'ptr'));
+    ptr.innerHTML = '▼&nbsp; consumer';
+    place(ptr, 940, 365, 120, 30);
+    const ys = [365, 439, 513];
+    for (let i = 0; i < 3; i++){
+      if (!alive(g)) return;
+      if (i > 0) await tweenP({ dur: 480, onUpdate: t => place(ptr, 940, lerp(ys[i-1], ys[i], t), 120, 30) });
+      await sleep(380); if (!alive(g)) return;
+      $('#orowC' + i).classList.add('show');
+    }
+  },
+  async lag(){},
+  async qaMode(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    await ok(650); if (!alive(g)) return;
+    setChip($('#svcStatus'), 'Received ✓', 'ok');
+    await ok(350); if (!alive(g)) return;
+    markQA(0);
+    setChipSvcChip('ev');
+    const j = $('#svcJson');
+    j.classList.remove('hidden'); j.classList.add('pop');
+    await ok(950); if (!alive(g)) return;
+    markQA(1);
+    camTo('kafka', 750);
+    setKafkaView('main');
+    await ok(700); if (!alive(g)) return;
+    $('#kafkaChip').classList.remove('hidden');
+    await ok(450); if (!alive(g)) return;
+    markQA(2);
+    setKafkaView('part');
+    await ok(700); if (!alive(g)) return;
+    markQA(3);
+    camTo('consumers', 750);
+    setKafkaView('main');
+    await ok(600); if (!alive(g)) return;
+    await consumeSeq(['bank','txnS','notif'], g);
+    if (!alive(g)) return;
+    markQA(4);
+    await ok(550); if (!alive(g)) return;
+    markQA(5);
+    j.classList.add('hidden');
+  },
+  async qaTest(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    setQA(['Payment request','Event created','Correct payload','Published to Kafka','Correct topic','Partitioned','Consumer received','Business action']);
+    const tc = $('#testCard');
+    tc.classList.remove('hidden');
+    await ok(950); if (!alive(g)) return;
+    camTo('person', 750); phoneScreen('wallet');
+    await ok(600); if (!alive(g)) return;
+    await fingerTo(166, 337, 480); if (!alive(g)) return;
+    await tapButton(); if (!alive(g)) return;
+    phoneScreen('ok');
+    $('#fingerG').classList.remove('show');
+    markQA(0);
+    camTo('corridor1', 650);
+    await ok(500); if (!alive(g)) return;
+    await fly({ from: P.phoneOut, to: P.svcIn, dur: 780, kind: 'request', t1: 'PAYMENT REQUEST', t2: 'TXN1001', small: true, onArrive: vanish });
+    if (!alive(g)) return;
+    setChip($('#svcStatus'), 'Received ✓', 'ok');
+    markQA(1);
+    camTo('service', 650);
+    await ok(500); if (!alive(g)) return;
+    setChipSvcChip('ev');
+    const j = $('#svcJson');
+    j.classList.remove('hidden'); j.classList.add('pop');
+    await ok(750); if (!alive(g)) return;
+    markQA(2);
+    j.classList.add('hidden');
+    camTo('corridor2', 650);
+    await ok(450); if (!alive(g)) return;
+    await fly({ from: P.svcRight, to: P.kafkaLeft, dur: 820, kind: 'event', t1: 'PaymentCompleted', t2: 'TXN1001', small: true, onArrive: e => { vanish(e); pingKafka(); } });
+    if (!alive(g)) return;
+    markQA(3);
+    camTo('kafka', 650); setKafkaView('main');
+    await ok(550); if (!alive(g)) return;
+    await fly({ from: { x: 852, y: 415 }, to: P.topicSlot, dur: 560, kind: 'event', t1: 'TXN1001', small: true, onArrive: vanish });
+    if (!alive(g)) return;
+    markQA(4);
+    setKafkaView('part');
+    await ok(550); if (!alive(g)) return;
+    await fly({ from: { x: 1030, y: 268 }, to: P.p0Slot, dur: 560, kind: 'event', t1: 'TXN1001', small: true, onArrive: vanish });
+    if (!alive(g)) return;
+    markQA(5);
+    camTo('consumers', 650); setKafkaView('main');
+    await ok(480); if (!alive(g)) return;
+    await consumeSeq(['bank','txnS','notif'], g);
+    if (!alive(g)) return;
+    markQA(6);
+    await ok(350); if (!alive(g)) return;
+    markQA(7);
+    await ok(450); if (!alive(g)) return;
+    tc.classList.add('passed');
+    showStatement('TEST PASSED ✓', 'TC-KAFKA-001 · all checkpoints verified');
+  },
+  async failureTest(){
+    const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+    setQA(['Payment made','Event published','Service broken','Event remains in Kafka','Service restored','Event processed']);
+    const tc = $('#testCard');
+    tc.classList.remove('hidden');
+    await ok(950); if (!alive(g)) return;
+    camTo('person', 750); phoneScreen('wallet');
+    await ok(500); if (!alive(g)) return;
+    await fingerTo(166, 337, 420); if (!alive(g)) return;
+    await tapButton(); if (!alive(g)) return;
+    phoneScreen('ok');
+    $('#fingerG').classList.remove('show');
+    markQA(0);
+    camTo('corridor1', 600);
+    await ok(420); if (!alive(g)) return;
+    await fly({ from: P.phoneOut, to: P.svcIn, dur: 660, kind: 'request', t1: 'PAYMENT REQUEST', t2: 'TXN1001', small: true, onArrive: vanish });
+    if (!alive(g)) return;
+    camTo('corridor2', 600);
+    await ok(420); if (!alive(g)) return;
+    await fly({ from: P.svcRight, to: P.kafkaLeft, dur: 720, kind: 'event', t1: 'PaymentCompleted', t2: 'TXN1001', small: true, onArrive: e => { vanish(e); pingKafka(); } });
+    if (!alive(g)) return;
+    markQA(1);
+    camTo('notif', 750);
+    await ok(650); if (!alive(g)) return;
+    $('#notif').classList.add('offline');
+    setChip($('#notifStatus'), 'OFFLINE ✕', 'bad');
+    await ok(800); if (!alive(g)) return;
+    markQA(2); markQA(3); pingKafka();
+    camTo('failWide', 700);
+    await ok(550); if (!alive(g)) return;
+    setChip($('#notifStatus'), 'Reconnecting…', 'warn');
+    await ok(850); if (!alive(g)) return;
+    $('#notif').classList.remove('offline');
+    setChip($('#notifStatus'), 'ONLINE ✓', 'ok');
+    await ok(450); if (!alive(g)) return;
+    markQA(4);
+    await fly({ from: { x: 1222, y: 430 }, to: P.notifIn, ctrl: { x: 1330, y: 520 }, dur: 950, kind: 'event', t1: 'TXN1001', small: true, onArrive: vanish });
+    if (!alive(g)) return;
+    setChip($('#notifStatus'), '✓ Processed', 'ok');
+    await ok(450); if (!alive(g)) return;
+    markQA(5);
+    tc.classList.add('passed');
+    showStatement('FAILURE RECOVERY TEST PASSED ✓', 'TC-KAFKA-002 · the event survived the failure');
+  },
+  async finalReplay(){},
+  async summary(){
+    renderSummarySeq();
+  },
+  async check(){},
+  async done(){}
+};
+
+/* ================= interactive actions ================= */
+async function useKafka(){
+  const g = GEN;
+  setPrimary('CONNECTING…', null, true);
+  await fadeLines(0); clearLines();
+  if (!alive(g)) return;
+  const hub = [
+    'M660 458 C 730 442, 780 424, 838 415',
+    'M1222 398 C 1310 398, 1315 250, 1388 235',
+    'M1222 415 C 1290 415, 1305 425, 1388 435',
+    'M1222 432 C 1310 432, 1315 560, 1388 635'
+  ];
+  for (const d of hub){
+    if (!alive(g)) return;
+    await addPath(d, { stroke: '#e8833c', width: 3, dur: 300 });
+    await sleep(90);
+  }
+  if (!alive(g)) return;
+  setInfo('With Kafka, everyone talks to one place — new services simply subscribe. No new wires.');
+  setPrimary('NEXT →', next);
+}
+async function breakNotif(){
+  const g = GEN;
+  setPrimary('BREAKING…', null, true);
+  const n = $('#notif');
+  for (let i = 0; i < 3; i++){
+    if (!alive(g)) return;
+    n.classList.add('flash'); await sleep(130);
+    n.classList.remove('flash'); await sleep(95);
+    if (!alive(g)) return;
+  }
+  n.classList.add('offline');
+  setChip($('#notifStatus'), 'OFFLINE ✕', 'bad');
+  $('#statusList').classList.remove('hidden');
+  $('#slNote').textContent = 'TXN1001 is safe in Kafka';
+  pingKafka();
+  setPrimary('RESTORE SERVICE', next);
+}
+async function sendDup(){
+  const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+  setPrimary('DELIVERING…', null, true);
+  setChip($('#bankStatus'), 'Processing…', 'warn');
+  await fly({ from: { x: 1222, y: 400 }, to: P.bankIn, ctrl: FAN.bank.ctrl, dur: 1150, kind: 'event', t1: 'TXN1001', t2: 'first delivery', small: true, onArrive: vanish });
+  if (!alive(g)) return;
+  setChip($('#bankStatus'), '✓ Processed', 'ok');
+  const t1 = addDyn(el('div', 'tag'));
+  t1.textContent = 'First event · ✓ processed';
+  place(t1, 1485, 150, 160, 27);
+  await ok(800); if (!alive(g)) return;
+  setChip($('#bankStatus'), '⚠ Duplicate', 'warn');
+  await fly({ from: { x: 1222, y: 400 }, to: P.bankIn, ctrl: { x: 1308, y: 255 }, dur: 1150, kind: 'event', t1: 'TXN1001', t2: 'second delivery', small: true, dup: true, onArrive: vanish });
+  if (!alive(g)) return;
+  const dn = $('#dupNote');
+  dn.classList.remove('hidden');
+  requestAnimationFrame(() => dn.classList.add('in'));
+  setPrimary('NEXT →', next);
+}
+async function simLag(){
+  const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+  setPrimary('SIMULATING…', null, true);
+  const q = $('#lagQueue');
+  for (let i = 0; i < 10; i++){
+    const s = el('div', 'slot');
+    s.style.left = (878 + i * 32) + 'px';
+    s.style.top = '340px';
+    q.appendChild(s);
+  }
+  const items = [];
+  let speed = 880, itemsDone = false;
+  function updateLag(){
+    const n = $$('#lagQueue .lagmini').length;
+    $('#lagNum').textContent = n;
+    $('#lagNum').parentElement.classList.toggle('hot', n > 4);
+  }
+  const consumeLoop = async () => {
+    while (alive(g)){
+      const front = items.find(m => m.isConnected);
+      if (front){
+        $('#lagConsumerSt').textContent = 'processing…';
+        const x0 = parseFloat(front.style.left) || 0, y0 = 340;
+        await tweenP({ dur: Math.min(380, speed * .45), onUpdate: t => {
+          front.style.left = lerp(x0, 1016, t) + 'px';
+          front.style.top  = lerp(y0, 457, t) + 'px';
+          front.style.opacity = String(1 - t * .92);
+        }});
+        if (!alive(g)) return;
+        front.remove();
+      } else {
+        if (itemsDone) break;
+        $('#lagConsumerSt').textContent = 'idle';
+      }
+      updateLag();
+      await sleep(speed);
+    }
+  };
+  consumeLoop();
+  for (let i = 0; i < 10; i++){
+    if (!alive(g)) return;
+    const m = el('div', 'lagmini');
+    m.textContent = '✉';
+    m.style.left = (878 + i * 32) + 'px';
+    m.style.top = '280px';
+    q.appendChild(m);
+    items.push(m);
+    tweenP({ dur: 260, onUpdate: t => { m.style.top = lerp(280, 340, t) + 'px'; } });
+    updateLag();
+    await sleep(175);
+  }
+  itemsDone = true;
+  if (!alive(g)) return;
+  await ok(900); if (!alive(g)) return;
+  $('#lagBoost').classList.remove('hidden');
+  speed = 210;
+  while (alive(g) && items.some(m => m.isConnected)) await sleep(130);
+  if (!alive(g)) return;
+  $('#lagConsumerSt').textContent = '✓ caught up';
+  updateLag();
+  setPrimary('NEXT →', next);
+}
+async function playFull(){
+  const g = GEN, ok = ms => sleep(ms).then(() => alive(g));
+  setPrimary('SKIP →', next);
+  const I = setInfo;
+  /* 1 — user pays */
+  camTo('person', 800); phoneScreen('wallet');
+  await ok(750); if (!alive(g)) return;
+  I('A user pays Rs. 500 — transaction TXN1001.');
+  await fingerTo(166, 337, 500); if (!alive(g)) return;
+  await tapButton(); if (!alive(g)) return;
+  phoneScreen('proc'); await ok(480); if (!alive(g)) return;
+  phoneScreen('txn');  await ok(380); if (!alive(g)) return;
+  phoneScreen('ok');
+  $('#fingerG').classList.remove('show');
+  /* 2 — request */
+  camTo('corridor1', 700);
+  I('A payment request travels to the Payment Service.');
+  await ok(650); if (!alive(g)) return;
+  await fly({ from: P.phoneOut, to: P.svcIn, dur: 900, kind: 'request', t1: 'PAYMENT REQUEST', t2: 'TXN1001 · Rs. 500', small: true, onArrive: vanish });
+  if (!alive(g)) return;
+  setChip($('#svcStatus'), 'Received ✓', 'ok');
+  /* 3 — event */
+  camTo('service', 700);
+  I('The service turns the request into an event.');
+  await ok(650); if (!alive(g)) return;
+  setChipSvcChip('ev');
+  const j = $('#svcJson');
+  j.classList.remove('hidden'); j.classList.add('pop');
+  await ok(1050); if (!alive(g)) return;
+  j.classList.add('hidden');
+  /* 4 — publish */
+  camTo('corridor2', 700);
+  I('The producer publishes the event to Kafka.');
+  await ok(550); if (!alive(g)) return;
+  await fly({ from: P.svcRight, to: P.kafkaLeft, dur: 900, kind: 'event', t1: 'PaymentCompleted', t2: 'TXN1001', small: true, onArrive: e => { vanish(e); pingKafka(); } });
+  if (!alive(g)) return;
+  /* 5 — topic → partition → broker */
+  camTo('kafka', 700); setKafkaView('main');
+  I('Kafka stores it in the payments topic…');
+  await ok(750); if (!alive(g)) return;
+  await fly({ from: { x: 852, y: 415 }, to: P.topicSlot, dur: 650, kind: 'event', t1: 'TXN1001', small: true, onArrive: vanish });
+  if (!alive(g)) return;
+  setKafkaView('part');
+  I('…into Partition 0, at a fixed offset.');
+  await ok(700); if (!alive(g)) return;
+  await fly({ from: { x: 1030, y: 268 }, to: P.p0Slot, dur: 600, kind: 'event', t1: 'TXN1001', small: true, onArrive: vanish });
+  if (!alive(g)) return;
+  setKafkaView('broker');
+  await ok(700); if (!alive(g)) return;
+  showChip($('#b1Chip'));
+  /* 6 — back out, consumers */
+  camTo('full', 800); setKafkaView('main');
+  await ok(650); if (!alive(g)) return;
+  $('#kafkaChip').classList.remove('hidden');
+  camTo('consumers', 700);
+  I('Consumers read the event — one event, many services.');
+  await ok(650); if (!alive(g)) return;
+  await consumeSeq(['bank','txnS','notif'], g);
+  if (!alive(g)) return;
+  showStatement('ONE EVENT → MULTIPLE CONSUMERS', '');
+  await ok(1500); if (!alive(g)) return;
+  hideStatement();
+  /* 7 — group */
+  camTo('group', 700);
+  I('Consumer groups share the work of a topic.');
+  await ok(550); if (!alive(g)) return;
+  const gb = $('#groupBox');
+  gb.classList.remove('hidden');
+  requestAnimationFrame(() => gb.classList.add('in'));
+  await ok(1000); if (!alive(g)) return;
+  /* 8 — failure & recovery */
+  camTo('notif', 700);
+  I('A service can fail — the event stays safe in Kafka.');
+  await ok(650); if (!alive(g)) return;
+  $('#notif').classList.add('offline');
+  setChip($('#notifStatus'), 'OFFLINE ✕', 'bad');
+  await ok(950); if (!alive(g)) return;
+  camTo('failWide', 700);
+  setChip($('#notifStatus'), 'Reconnecting…', 'warn');
+  await ok(850); if (!alive(g)) return;
+  $('#notif').classList.remove('offline');
+  setChip($('#notifStatus'), 'ONLINE ✓', 'ok');
+  await ok(450); if (!alive(g)) return;
+  await fly({ from: { x: 1222, y: 430 }, to: P.notifIn, ctrl: { x: 1330, y: 520 }, dur: 900, kind: 'event', t1: 'TXN1001', small: true, onArrive: vanish });
+  if (!alive(g)) return;
+  setChip($('#notifStatus'), '✓ Processed', 'ok');
+  /* 9 — complete */
+  camTo('full', 800);
+  await ok(550); if (!alive(g)) return;
+  showStatement('JOURNEY COMPLETE ✓', 'TXN1001 — from tap to processed');
+  setPrimary('CONTINUE →', next);
+}
+
+/* ================= cards ================= */
+const SUMMARY_ROWS = [
+  ['EVENT', 'Carried information about something that happened.'],
+  ['TOPIC', 'Organized related events.'],
+  ['PARTITION', 'Provided scalable, parallel storage and processing.'],
+  ['OFFSET', 'Identified each event’s position.'],
+  ['BROKER', 'Stored the Kafka data.'],
+  ['CONSUMER', 'Read and processed events.'],
+  ['CONSUMER GROUP', 'Let consumers share processing work.'],
+  ['KAFKA', 'Connected these pieces into a distributed event-streaming system.']
+];
+function showCardFor(kind){
+  const c = $('#card');
+  c.classList.remove('hidden');
+  if (kind === 'summary'){
+    c.innerHTML = '<div class="sum-hd">WHAT KAFKA DID</div><div class="sum-rows">' +
+      SUMMARY_ROWS.map(r => '<div class="s-item"><b>' + r[0] + '</b><span>' + r[1] + '</span></div>').join('') +
+      '</div><div class="sum-final hidden" id="sumFinal"><div class="sf1">Kafka did not make the payment.</div><div class="sf2">Kafka handled the event flow around the payment.</div></div>';
+  } else if (kind === 'quiz'){
+    qIdx = 0;
+    renderQuiz();
+  } else if (kind === 'done'){
+    c.innerHTML = '<div class="done-hd">ONE PAYMENT.<br>ONE EVENT.<br>ONE CONTINUOUS JOURNEY.</div>' +
+      '<div class="done-sub">Kafka did not make the payment —<br>it handled the event flow around it.</div>' +
+      '<div class="done-mini">TXN1001 · Rs. 500 · PaymentCompleted ✓</div>';
+  }
+}
+function renderSummarySeq(){
+  const g = GEN;
+  $$('#card .s-item').forEach((it, i) => {
+    setTimeout(() => { if (alive(g)) it.classList.add('show'); }, 500 + i * 420);
+  });
+  setTimeout(() => {
+    if (alive(g)){
+      const f = $('#sumFinal');
+      if (f){ f.classList.remove('hidden'); f.classList.add('in'); }
+    }
+  }, 500 + SUMMARY_ROWS.length * 420 + 450);
+}
+
+/* ================= quiz ================= */
+const QUIZ = [
+  { q: 'What happened after Payment Service created TXN1001’s event?',
+    opts: ['The event was published to Kafka', 'The event was emailed to the user', 'The event was deleted'],
+    a: 0, note: 'The Payment Service (producer) published PaymentCompleted to the payments topic.' },
+  { q: 'Where was TXN1001 stored?',
+    opts: ['In the user’s phone', 'In the payments topic, in a partition, at an offset', 'In a normal database table'],
+    a: 1, note: 'Kafka stores events in topic partitions, each event identified by its offset.' },
+  { q: 'What happens if Notification Service goes offline?',
+    opts: ['The payment is reversed', 'The event is lost', 'The event stays in Kafka and is processed after recovery'],
+    a: 2, note: 'Kafka’s retention keeps the event safe until the consumer comes back.' },
+  { q: 'What does an offset represent?',
+    opts: ['The number of partitions', 'The event’s position inside its partition', 'The consumer’s speed'],
+    a: 1, note: 'Offsets let a consumer know exactly where to resume reading.' },
+  { q: 'Why can multiple services consume the same event?',
+    opts: ['Only one service may read an event', 'Different consumer groups each read the topic independently', 'Kafka clones the event only when asked'],
+    a: 1, note: 'Each consumer group tracks its own position, so every group gets the full stream.' },
+  { q: 'Why does QA test duplicate events and failures?',
+    opts: ['To slow the system down', 'To delete old events', 'Delivery can repeat and services can fail — the system must handle both safely'],
+    a: 2, note: 'Idempotent consumers plus Kafka’s storage are what make the system trustworthy.' }
+];
+let qIdx = 0, qAnswered = false;
+function renderQuiz(){
+  const q = QUIZ[qIdx];
+  qAnswered = false;
+  const c = $('#card');
+  c.innerHTML = '<div class="qz-top">KNOWLEDGE CHECK · ' + (qIdx + 1) + ' / ' + QUIZ.length + '</div>' +
+    '<div class="qz-q">' + q.q + '</div>' +
+    '<div class="qz-opts">' + q.opts.map((o, i) => '<button class="qz-opt" data-i="' + i + '">' + o + '</button>').join('') + '</div>' +
+    '<div class="qz-note hidden" id="qzNote"></div>';
+  setPrimary(qIdx < QUIZ.length - 1 ? 'NEXT QUESTION →' : 'FINISH →', quizNext, true);
+  c.querySelectorAll('.qz-opt').forEach(b => { b.onclick = () => quizPick(q, +b.dataset.i); });
+}
+function quizPick(q, i){
+  if (qAnswered) return;
+  qAnswered = true;
+  const c = $('#card');
+  c.querySelectorAll('.qz-opt').forEach((b, j) => {
+    if (j === q.a) b.classList.add('good');
+    else if (j === i) b.classList.add('bad');
+    b.disabled = true;
+  });
+  const note = $('#qzNote');
+  note.classList.remove('hidden');
+  note.textContent = (i === q.a ? 'Correct. ' : 'Not quite. ') + q.note;
+  setPrimary(qIdx < QUIZ.length - 1 ? 'NEXT QUESTION →' : 'FINISH →', quizNext, false);
+}
+function quizNext(){
+  if (!qAnswered) return;
+  if (qIdx < QUIZ.length - 1){ qIdx++; renderQuiz(); }
+  else { hideCard(); next(); }
+}
+
+/* ================= explore ================= */
+const EXPLORE = {
+  topic:      { title: 'TOPIC', at: 1, notes: ['Producers publish to a topic by name.', 'Consumers subscribe to a topic to receive its events.'], extra: 'Related: partition, offset, broker' },
+  partition:  { title: 'PARTITION', at: 2, notes: ['Partitions are how Kafka scales — each partition is one ordered stream.', 'Events with the same key always land in the same partition.'], extra: 'Related: offset, consumer group' },
+  offset:     { title: 'OFFSET', at: 3, notes: ['Offsets increase monotonically within a partition.', 'Consumers track offsets so they can resume where they left off.'], extra: 'Related: consumer, retention' },
+  broker:     { title: 'BROKER', at: 4, notes: ['A cluster is simply several brokers working together.', 'Partitions live on brokers, with replicas for safety.'], extra: 'Related: replication, topic' },
+  consumer:   { title: 'CONSUMER', at: -1, notes: ['Each consumer tracks its own position in each partition.', 'Independent consumers can read the very same event.'], extra: 'Related: consumer group, lag' },
+  group:      { title: 'CONSUMER GROUP', at: -1, notes: ['Within one group, partitions are shared among members.', 'Different groups each read the whole topic independently.'], extra: 'Related: consumer, partition' }
+};
+function openExplore(){
+  const id = FLOW[cur];
+  const e = EXPLORE[id];
+  if (!e) return;
+  const path = ['KAFKA', 'TOPIC', 'PARTITION', 'OFFSET', 'BROKER'];
+  const pathHtml = e.at < 0 ? '' :
+    '<div class="ex-path">' + path.map((p, i) => '<span class="' + (i === e.at ? 'cur' : '') + '">' + p + '</span>').join('<i>→</i>') + '</div>';
+  const c = $('#card');
+  c.innerHTML = '<div class="ex-hd">EXPLORING · ' + e.title + '</div>' + pathHtml +
+    '<ul class="ex-notes">' + e.notes.map(n => '<li>' + n + '</li>').join('') + '</ul>' +
+    '<div class="ex-extra">' + e.extra + '</div>' +
+    '<button class="ghost" id="exBack">← BACK TO JOURNEY</button>';
+  c.classList.remove('hidden');
+  $('#exBack').onclick = hideCard;
+}
+
+/* ================= navigation ================= */
+let cur = 0;
+function updateStageBar(){
+  const s = STAGE_OF[FLOW[cur]];
+  $$('#stageBar .pill').forEach((p, i) => p.classList.toggle('on', i === s));
+  $('#stepCount').textContent = 'Step ' + (cur + 1) + ' / ' + FLOW.length;
+}
+function renderSecondaries(list){
+  const box = $('#secondaries');
+  box.innerHTML = '';
+  for (const s of list){
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    if (s === 'explore'){ b.textContent = 'EXPLORE'; b.onclick = openExplore; }
+    if (s === 'compare'){ b.textContent = 'COMPARE WITHOUT KAFKA'; b.onclick = () => goTo(FLOW.indexOf('compare')); }
+    box.appendChild(b);
+  }
+}
+function goTo(idx){
+  cur = Math.max(0, Math.min(FLOW.length - 1, idx));
+  const id = FLOW[cur];
+  applyBase(id);
+  camTo(BASE[id].cam || 'full', 950);
+  setInfo(BASE[id].info || '');
+  const c = BASE[id].concept;
+  const ce = $('#concept');
+  if (c){
+    ce.classList.remove('hidden');
+    ce.querySelector('.c-name').textContent = c.name;
+    ce.querySelector('.c-line').textContent = c.line;
+    ce.style.animation = 'none'; void ce.offsetWidth; ce.style.animation = 'infoIn .45s ease';
+  } else ce.classList.add('hidden');
+  const pr = BASE[id].primary;
+  if (!pr) setPrimary('NEXT →', next);
+  else setPrimary(pr.label, pr.run, !!pr.disabled);
+  renderSecondaries(BASE[id].secondaries || []);
+  updateStageBar();
+  const enter = (ENTER[id] || (async () => {}))();
+  enter.catch(() => {});
+  Promise.race([ enter, sleep(25000) ]); /* safe completion: navigation never waits on animation */
+}
+function next(){ if (cur < FLOW.length - 1) goTo(cur + 1); }
+function back(){ if (cur > 0) goTo(cur - 1); }
+function replay(){ goTo(cur); }
+function resetAll(){ goTo(0); }
+
+/* ================= init ================= */
+$('#backBtn').onclick = back;
+$('#replayBtn').onclick = replay;
+$('#resetBtn').onclick = resetAll;
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight'){ if (cur < FLOW.length - 1) next(); }
+  else if (e.key === 'ArrowLeft'){ if (cur > 0) back(); }
+  else if (e.key === ' ' || e.key === 'Enter'){
+    if (document.activeElement && document.activeElement.tagName === 'BUTTON') return;
+    const b = $('#primaryBtn');
+    if (!b.disabled){ e.preventDefault(); b.click(); }
+  }
+  else if (e.key === 'r' || e.key === 'R'){ replay(); }
+});
+window.addEventListener('resize', () => { fit(); applyCam(); });
+fit();
+applyCam();
+goTo(0);
+</script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a383b0f39ef54e28',t:'MTc4ODkzMDY3NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
